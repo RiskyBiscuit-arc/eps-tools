@@ -7,7 +7,11 @@ Firmware files are ignored by Git. Do not commit them.
 
 ## Recommended flashing
 
-From the parent `eps_tools/` folder on the comma, use the guided flasher:
+Add the tools to your openpilot fork root and commit them. Once the fork is
+installed on the comma, run the guided flasher from `/data/openpilot/eps_tools/`.
+A standalone device copy under `/data/media/0/eps_tools/` is an alternative,
+not the fork integration location. See the main README for both installations.
+From the installed tools folder:
 
 ```sh
 PYTHONPATH=/data/openpilot python3 flash.py
