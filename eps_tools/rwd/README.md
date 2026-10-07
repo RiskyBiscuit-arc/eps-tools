@@ -14,7 +14,7 @@ not the fork integration location. See the main README for both installations.
 From the installed tools folder:
 
 ```sh
-PYTHONPATH=/data/openpilot python3 flash.py
+python3 flash.py
 ```
 
 It handles selection, validation, power prompts, bus detection, and a recommended
