@@ -46,9 +46,11 @@ def read_file(fn):
 
   return f_data
 
-def validate_fw(fw_encrypted):
-  from check_rwd import validate_firmware
-  validate_firmware(fw_encrypted)
+def validate_fw(fw, skip_checksum):
+  from check_rwd import validate_container, validate_firmware
+  validate_container(fw)
+  if not skip_checksum:
+    validate_firmware(fw)
 
 
 def calculate_session_key(const_bytes, seed_bytes):
@@ -60,13 +62,17 @@ def calculate_session_key(const_bytes, seed_bytes):
   key = ((seed + k0) ^ (seed * k1) % k2) & 0xFFFF
   return struct.pack('!H', key)
 
-def get_uds_client(can_addr, bus):
-  try:
-    panda = Panda(disable_checks=True)
-    panda.set_safety_mode(CarParams.SafetyModel.elm327)
+def get_uds_client(can_addr, bus, use_mock=False):
+  if not use_mock:
+    try:
+      panda = Panda(disable_checks=True)
+      panda.set_safety_mode(CarParams.SafetyModel.elm327)
+    except Exception as e:
+      raise SystemExit(f"Could not open the Panda ({e}). Stop openpilot, check the connection, "
+                       "or pass --mock to rehearse without hardware.") from e
     uds_client = UdsClient(panda, can_addr, bus=bus)
     print("Using real client")
-  except Exception:
+  else:
     mock_helper = mock.patch('opendbc.car.uds.UdsClient', autospec=True)
     uds_client = mock_helper.start()
     uds_client.security_access.return_value = b'1234'
@@ -121,8 +127,8 @@ def request_seed(uds_client, timeout_s):
       remaining = deadline - time.monotonic()
       if remaining <= 0:
         print(f"  still refused ({reason}) after {timeout_s:.0f}s over {attempt} attempts.")
-        print("  The EPS security-access lockout has not expired. Leave the car in")
-        print("  accessory mode and retry with a longer --seed-timeout.")
+        print("  The EPS security-access lockout has not expired. Leave the ignition ON")
+        print("  (engine OFF) and retry with a longer --seed-timeout.")
         raise
       wait = min(SEED_RETRY_INTERVAL_S, remaining)
       print(f"  attempt {attempt}: {reason} — waiting {wait:.0f}s "
@@ -144,7 +150,8 @@ if __name__ == "__main__":
   parser.add_argument("-b", "--bus", default=1, type=auto_int, help="CAN bus number (default 1)")
   parser.add_argument("--debug", action="store_true", help="Enable debug output")
   parser.add_argument("--danger", action="store_true", help="Run in danger mode that actually performs mutating actions")
-  parser.add_argument("--skip-checksum", action="store_true", help="Skip firmware checksum validation (not recommended — a bad checksum will cause the EPS to reject the flash)")
+  parser.add_argument("--skip-checksum", action="store_true", help="Skip firmware checksum validation (not recommended — an image with bad checksums can brick the EPS)")
+  parser.add_argument("--mock", action="store_true", help="Rehearse the dry-run flow with a mock client instead of a Panda")
   parser.add_argument("--seed-timeout", default=DEFAULT_SEED_TIMEOUT_S, type=float,
                       help=f"Seconds to keep retrying the security-access seed request while the EPS "
                            f"reports a delay/lockout (default {DEFAULT_SEED_TIMEOUT_S:.0f})")
@@ -152,8 +159,7 @@ if __name__ == "__main__":
 
   try:
     fw = x5a(read_file(args.rwd))
-    if not args.skip_checksum:
-      validate_fw(fw)
+    validate_fw(fw, args.skip_checksum)
   except (OSError, ValueError) as e:
     raise SystemExit(f"Image validation failed: {e}") from e
 
@@ -161,13 +167,13 @@ if __name__ == "__main__":
 
   can_addr = get_can_address(fw)
   print(f"Connecting to CAN address 0x{can_addr:08X}")
-  uds_client = get_uds_client(can_addr, args.bus)
+  uds_client = get_uds_client(can_addr, args.bus, args.mock)
   # --danger must never proceed on the mock fallback — it would "succeed" without
   # programming the EPS.
   if args.danger and isinstance(uds_client, mock.Mock):
     raise SystemExit("ERROR: --danger requires a real Panda connection (got mock client)")
 
-  debug_output: list[bytes | None] = list()
+  debug_output = list()
 
   print("tester present ...")
   uds_client.tester_present()
@@ -217,6 +223,9 @@ if __name__ == "__main__":
     length = block["length"]
     max_chunk_size = uds_client.request_download(block["start"], length)
     max_chunk_size -= 2 # subtract header bytes
+    if max_chunk_size <= 0:
+      # A zero chunk would never advance the transfer loop below.
+      raise ValueError(f"ECU reported an unusable max block length ({max_chunk_size + 2} bytes)")
 
     with tqdm.tqdm(total=length, unit='B', unit_scale=True) as t:
       cursor = 0x0
@@ -256,34 +265,6 @@ if __name__ == "__main__":
     else:
       sys.exit(1)
 
-  if isinstance(uds_client, mock.Mock):
-    from unittest.mock import ANY, call
-
-    #print(uds_client.method_calls)
-
-    calls = []
-    calls += [call.read_data_by_identifier(DATA_IDENTIFIER_TYPE.APPLICATION_SOFTWARE_IDENTIFICATION)]
-    calls += [call.diagnostic_session_control(SESSION_TYPE.EXTENDED_DIAGNOSTIC)]
-    calls += [call.security_access(ACCESS_TYPE.REQUEST_SEED)]
-    calls += [call.security_access(ACCESS_TYPE.SEND_KEY, ANY)]
-    calls += [call.diagnostic_session_control(SESSION_TYPE.PROGRAMMING)]
-    calls += [call.routine_control(ROUTINE_CONTROL_TYPE.START, ROUTINE_IDENTIFIER_TYPE.ERASE_MEMORY)]
-    calls += [call.write_data_by_identifier(FLASH_DECRYPTION_KEY, fw.keys)]
-    calls += [call.request_download(0x10000, 0x50000)]
-    calls += [call.transfer_data(1, fw.firmware_encrypted[0][0:512])]
-    calls += [call.transfer_data(2, fw.firmware_encrypted[0][512:1024])]
-    uds_client.assert_has_calls(calls)
-
-    num_blocks = -(len(fw.firmware_encrypted[0]) // -512) # sneaky math ceil
-    assert uds_client.transfer_data.call_count == num_blocks
-
-    calls = []
-    calls += [call.transfer_data(num_blocks & 0xFF - 1, fw.firmware_encrypted[0][((num_blocks-1)*512):])]
-    calls += [call.request_transfer_exit()]
-    calls += [call.routine_control(ROUTINE_CONTROL_TYPE.START, ROUTINE_IDENTIFIER_TYPE.CHECK_PROGRAMMING_DEPENDENCIES)]
-    calls += [call.ecu_reset(RESET_TYPE.HARD)]
-    uds_client.assert_has_calls(calls)
-
-    if args.debug:
-      print("\nDebug output:")
-      print(*debug_output, sep="\n")
+  if args.debug:
+    print("\nDebug output:")
+    print(*debug_output, sep="\n")

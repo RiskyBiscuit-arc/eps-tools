@@ -30,7 +30,7 @@ including the alternative standalone comma installation.
 | --- | --- |
 | [`flash.py`](eps_tools/flash.py) | Recommended guided flasher: selection, validation, bus detection, dry run, and explicit flash confirmation. |
 | [`eps-diag.py`](eps_tools/eps-diag.py) | Routine EPS communication sanity check; `--recovery` adds troubleshooting guidance. |
-| [`check_rwd.py`](eps_tools/check_rwd.py) | Offline container and supported firmware checksum validation. |
+| [`check_rwd.py`](eps_tools/check_rwd.py) | Offline container, header, and firmware checksum validation for every image. |
 | [`eps-update.py`](eps_tools/eps-update.py) | Older manual flashing alternative and the guided flasher's programming backend. |
 
 A successful programming result or communication check does not verify steering

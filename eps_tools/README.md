@@ -31,9 +31,9 @@ eps_tools/
   rwd/              local firmware images (not distributed by eps-tools)
 ```
 
-Run the scripts **from this folder** so `rwd_format` resolves; `opendbc`/`panda`
-come from the openpilot install (prefix with `PYTHONPATH=/data/openpilot` if you
-hit import errors).
+Run the scripts **from this folder**: the examples below use `rwd/...` paths
+relative to it. `opendbc`/`panda` come from the openpilot install (prefix with
+`PYTHONPATH=/data/openpilot` if you hit import errors).
 
 ## Add to your openpilot fork (primary use)
 
@@ -72,15 +72,21 @@ in the standalone repository. Keep a validated matching stock recovery image.
 Run `python3 flash.py` from the tools folder for whichever installation above
 you use.
 
-The guided script lists compatible images when the cached car identification is
-available, checks the selected image, prompts you to turn the car OFF, and stops
-openpilot. It then prompts for ignition ON (engine OFF), detects the CAN bus,
+The guided script lists compatible images when the car's cached fingerprint
+(CarParams) is available, checks the selected image, prompts you to turn the car
+OFF, and stops openpilot. It then prompts for ignition ON (engine OFF), detects the CAN bus,
 offers the recommended dry run, and requires you to type `FLASH` before programming.
 Follow the prompts; do not bypass image validation or the dry run for normal use.
 
-After **“Firmware programming completed”**, the optional communication sanity
-check can confirm that the EPS responds. It does not mean a failure was detected,
-and it does not verify steering operation or firmware correctness. The final menu
+Every image gets the same `check_rwd.py` validation. Images that are malformed or
+fail a checksum are listed as **INVALID** and cannot be selected: the guided
+script is meant to keep new users from flashing a bad image, and it never passes
+`--skip-checksum`. The manual `eps-update.py` path below is for advanced users.
+
+After **“Firmware programming completed”**, the menu offers an optional
+communication sanity check that confirms the EPS responds. Being offered the check
+does not mean a failure was detected, and a passing check does not verify steering
+operation or firmware correctness. The final menu
 also offers to restore openpilot or reboot. A failed programming attempt is clearly
 reported and has a separate retry/recovery flow; recovery is not guaranteed.
 
@@ -103,17 +109,21 @@ An expected dry-run stop is printed without a traceback. Bus 1 is the manual
 default, not a guarantee that it is correct for your vehicle. Restore openpilot
 when finished, or reboot the device.
 
+If the Panda can't be opened, `eps-update.py` stops with an error. To rehearse the
+dry-run flow without hardware, pass `--mock`; `--danger` never runs on the mock.
+
 ### `--skip-checksum` (not recommended)
-If a firmware isn't covered by the checksum checker, you can add `--skip-checksum`.
-**Be careful — flashing a `.rwd` with invalid checksums can brick the EPS.** Only
-use it on an image you trust.
+`--skip-checksum` skips the firmware checksum check, including checksums that
+actively **fail**. It exists only for advanced manual use; `flash.py` never uses
+it. **Be careful — flashing a `.rwd` with invalid checksums can brick the EPS.**
+Only use it on an image you trust and understand.
 ```
 python3 eps-update.py rwd/SOME_FIRMWARE.rwd -b 1 --skip-checksum --danger
 ```
 
 ## Optional EPS communication sanity check
 
-With ignition ON and openpilot stopped so the Panda is available:
+With ignition ON (engine OFF) and openpilot stopped so the Panda is available:
 
 ```sh
 python3 eps-diag.py
@@ -138,24 +148,30 @@ specifically confirm the EPS. Cleanup warnings do not replace the check result.
 ## If a flash fails / crashes
 A failure after erase can leave the EPS without power-steering assist. Recovery
 is not guaranteed. Retain a verified stock recovery image for your exact ECU;
-inspect the failure before retrying. The guided `flash.py` provides a recovery menu.
+inspect the failure before retrying. The guided `flash.py` offers a retry menu
+after a failed flash.
 
-Tooling committed to your fork belongs under `/data/openpilot/eps_tools/`.
-Manually copied tools and locally supplied firmware there may be untracked and
-removed by an update. Keep recovery firmware outside the updater-managed tree,
-and do not run an openpilot update during flashing. For standalone tools, the
-alternative media location above keeps the copy outside that tree.
+### Keep recovery firmware safe from updates
+Locally supplied firmware under `/data/openpilot/eps_tools/rwd/` is untracked and
+can be removed by an openpilot update, as can manually copied tools there. Keep a
+copy of your recovery firmware outside the updater-managed tree (for example under
+`/data/media/0/`), and do not run an openpilot update during flashing.
 
 ## Validate an image offline
 ```
-python3 check_rwd.py rwd/39990-TLA-A040-linear-max.rwd
+python3 check_rwd.py rwd/YOUR_FIRMWARE.rwd
 python3 check_rwd.py rwd/*.rwd
 ```
 
-Unsupported checksum coverage is reported as not fully validated and returns a
-nonzero exit status, as do malformed images and failed checksums. The explicit
-`--skip-checksum` flow can bypass firmware checksum checks, but cannot bypass
-container structure, declared payload length, or the file checksum.
+Every image gets the same checks, whatever the vehicle:
+- the container structure and the file checksum;
+- the headers the flasher reads (ECU address, software IDs, seed secrets);
+- the declared payload length;
+- both firmware checksums: the word sum at `length - 0x80` and the negative word
+  sum at `length - 2` of the decrypted block.
+
+Malformed images and failed checksums return a nonzero exit status. The explicit
+`--skip-checksum` flow can bypass only the firmware checksums.
 
 See `rwd/README.md` for local firmware handling. Firmware is excluded from the
 standalone tools repository.

@@ -12,9 +12,9 @@ for a routine communication sanity check or recovery troubleshooting. Runs three
 By default checks buses 0 and 1. Pass --bus to pin to a single bus.
 
 Usage (on the comma device via SSH):
-  python eps-diag.py            # check buses 0 and 1, address 0x18DA30F1
-  python eps-diag.py -b 1       # pin to bus 1
-  python eps-diag.py --scan     # brute-force scan all common Honda ECU addrs
+  python3 eps-diag.py            # check buses 0 and 1, address 0x18DA30F1
+  python3 eps-diag.py -b 1       # pin to bus 1
+  python3 eps-diag.py --scan     # brute-force scan all common Honda ECU addrs
 """
 
 from __future__ import annotations
@@ -115,8 +115,10 @@ def passive_sniff(panda: Panda, buses: list[int], resp_addr: int,
   print(f"      Watching for frames from 0x{resp_addr:08X} (EPS response addr)")
 
   print("      Passive silence is inconclusive: this diagnostic address is not a periodic heartbeat.")
+  # can_clear(bus) only drops queued TX; 0xFFFF drops buffered RX so stale frames aren't counted.
   for bus in bus_list:
     panda.can_clear(bus)
+  panda.can_clear(0xFFFF)
 
   deadline = time.monotonic() + duration
   eps_counts = {b: 0 for b in bus_list}
@@ -246,6 +248,10 @@ def main(argv=None):
         clients.append(uds)
         ping = uds_tester_present(uds, bus)
         result = uds_session_and_id(uds, bus)
+        if not (ping or result["responded"]):
+          # Nothing answered on this bus: restoring its session would only time
+          # out and print a misleading power-cycle warning.
+          clients.remove(uds)
         confirmed |= ping or result["responded"]
         live_id = live_id or result["app_id"]
         print(f"  Bus {bus}: default session accepted={result['default']}, "
