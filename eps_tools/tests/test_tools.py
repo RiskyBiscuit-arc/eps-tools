@@ -178,6 +178,8 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn('not confirmed', output)
         self.assertNotIn('bricked', output)
+        self.assertNotIn('Cleanup:', output)
+        self.assertEqual(self.client.diagnostic_session_control.call_count, 2)  # default + extended, no cleanup
         self.assertEqual(self.run_diag(['--sniff-only'])[0], 1)
         self.assertEqual(self.run_diag(['--sniff-only'], sniff=True)[0], 0)
 

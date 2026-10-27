@@ -59,7 +59,7 @@ class x5a(Base):
                     raise ValueError("encryption key header not three bytes")
                 return header.values[0].value
 
-        raise Exception("could not find encryption key header!")
+        raise ValueError("could not find encryption key header")
 
     def _get_firmware(self, data):
         if len(data) < 8:

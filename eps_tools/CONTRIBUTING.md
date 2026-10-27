@@ -1,8 +1,8 @@
 # Contributing and updates
 
 The canonical source is https://github.com/RiskyBiscuit-arc/eps-tools.
-Submit tooling fixes there. This openpilot fork retains its existing firmware
-files; the standalone repository has no firmware in its initial commit or history.
+Submit tooling fixes there. The standalone repository has no firmware in its
+history; any firmware files in an openpilot fork stay local to that fork.
 `rwd_format/` is the Python-3 parser. `rwd_xray/format/` is reference-only
 upstream code; preserve its MIT license and attribution.
 
@@ -59,7 +59,8 @@ snapshot import above.
 
 ## Validation
 
-Check the production Python-3 scripts and parser for syntax/import errors.
+Lint the production Python-3 scripts and parser from the repository root with
+`ruff check eps_tools` (the config in `eps_tools/ruff.toml` excludes `rwd_xray/`).
 Do not treat the legacy Python-2 reference tools as Python-3 executables.
 Hardware changes require explicit bench/vehicle evidence; static checks cannot
 validate UDS timing, ECU recovery, or live steering. Do not flash hardware as

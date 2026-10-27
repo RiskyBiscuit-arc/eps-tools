@@ -3,13 +3,14 @@
 Guided EPS flash helper.
 
 Steps it runs for you:
-  1. Reads the car's current EPS firmware, scans .rwd images (in rwd/ and next to
-     this script), and shows only ones compatible with your EPS — pre-validating
-     each with check_rwd.py (flags any that fail). If none are compatible (or the
-     car isn't fingerprinted yet), it asks before listing all images.
+  1. Reads the EPS firmware ID cached in CarParams (from the last fingerprint, not
+     a live read), scans .rwd images (in rwd/ and next to this script), and shows
+     only ones compatible with that ID — pre-validating each with check_rwd.py
+     (flags any that fail). If none are compatible it asks before listing all
+     images; if no cached ID exists it lists all images.
   2. Shows a numbered list; you pick one.
   3. Confirms the car is OFF, then stops openpilot (frees the panda), then
-     prompts you to switch the car to accessory mode (ignition ON, engine OFF).
+     prompts you to switch the ignition ON (engine OFF).
   4. Auto-detects the EPS CAN bus via live UDS probe of the selected .rwd's
      address (asks if ambiguous) unless --bus was passed.
   5. Offers a dry run (recommended) or skip (not recommended); --skip-dry-run
@@ -387,7 +388,7 @@ def run_dry_run(rel, bus, skip_checksum, env, name, seed_timeout=None):
                 continue
             exit_with_op_stopped(
                 "\nStopping while the EPS delay is still active — NOT flashing.\n"
-                "Leave the car in accessory mode (ignition off restarts the timer) and re-run."
+                "Leave the ignition ON (turning it off restarts the timer) and re-run."
             )
         if rc != 0 or DRY_RUN_OK_MARKER not in combined:
             exit_with_op_stopped(
@@ -415,7 +416,7 @@ def flash_failure_menu(rel, bus, skip_checksum, env, name, rc, seed_timeout=None
         print(f"\nFlash process exited ({rc}).")
         print("FLASH FAILED or incomplete — EPS may need a recovery re-flash.")
         print("A security lockout after a dry run is common on some cars:")
-        print("  wait a bit, power-cycle the car (OFF → accessory), then retry.")
+        print("  wait a bit, power-cycle the car (OFF → ignition ON, engine OFF), then retry.")
         print("  [r] Retry flash (--danger only, no dry run)")
         print("  [m] Continue to post-flash menu")
         print("  [q] Quit (leave openpilot stopped)")
@@ -501,12 +502,12 @@ def main():
         if input("   Type 'yes' to continue with this unvalidated image: ").strip().lower() != "yes":
             sys.exit("Aborted.")
 
-    # Power sequence: kill openpilot with the car OFF, then switch to accessory
-    # mode — so openpilot doesn't re-grab the panda when CAN comes alive.
+    # Power sequence: kill openpilot with the car OFF, then switch the ignition
+    # ON — so openpilot doesn't re-grab the panda when CAN comes alive.
     if input("\nConfirm the car is fully OFF (ignition off) — type 'yes': ").strip().lower() != "yes":
         sys.exit("Aborted — turn the car off first, then re-run.")
     stop_openpilot()
-    input("Now switch the car to ACCESSORY mode (ignition ON, engine OFF, A/C off).\n"
+    input("Now switch the ignition ON (engine OFF, A/C off).\n"
           "Press Enter when the dash is on and ready: ")
 
     bus = resolve_bus(args.bus, path)
@@ -517,7 +518,7 @@ def main():
         run_dry_run(rel, bus, skip_checksum, env, name, args.seed_timeout)
 
     print(f"\n=== READY TO FLASH: {name} (bus {bus}) ===")
-    print("Make sure the car is in accessory mode (ignition ON, engine OFF, A/C off).")
+    print("Make sure the ignition is ON (engine OFF, A/C off).")
     print("A failed flash may require recovery with a matching stock image; recovery is not guaranteed.")
     if input("Type 'FLASH' to commit the real flash (--danger): ").strip() != "FLASH":
         exit_with_op_stopped("Aborted — no flash performed.")

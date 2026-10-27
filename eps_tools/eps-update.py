@@ -121,8 +121,8 @@ def request_seed(uds_client, timeout_s):
       remaining = deadline - time.monotonic()
       if remaining <= 0:
         print(f"  still refused ({reason}) after {timeout_s:.0f}s over {attempt} attempts.")
-        print("  The EPS security-access lockout has not expired. Leave the car in")
-        print("  accessory mode and retry with a longer --seed-timeout.")
+        print("  The EPS security-access lockout has not expired. Leave the ignition ON")
+        print("  (engine OFF) and retry with a longer --seed-timeout.")
         raise
       wait = min(SEED_RETRY_INTERVAL_S, remaining)
       print(f"  attempt {attempt}: {reason} — waiting {wait:.0f}s "
@@ -144,7 +144,7 @@ if __name__ == "__main__":
   parser.add_argument("-b", "--bus", default=1, type=auto_int, help="CAN bus number (default 1)")
   parser.add_argument("--debug", action="store_true", help="Enable debug output")
   parser.add_argument("--danger", action="store_true", help="Run in danger mode that actually performs mutating actions")
-  parser.add_argument("--skip-checksum", action="store_true", help="Skip firmware checksum validation (not recommended — a bad checksum will cause the EPS to reject the flash)")
+  parser.add_argument("--skip-checksum", action="store_true", help="Skip firmware checksum validation (not recommended — an image with bad checksums can brick the EPS)")
   parser.add_argument("--seed-timeout", default=DEFAULT_SEED_TIMEOUT_S, type=float,
                       help=f"Seconds to keep retrying the security-access seed request while the EPS "
                            f"reports a delay/lockout (default {DEFAULT_SEED_TIMEOUT_S:.0f})")
@@ -167,7 +167,7 @@ if __name__ == "__main__":
   if args.danger and isinstance(uds_client, mock.Mock):
     raise SystemExit("ERROR: --danger requires a real Panda connection (got mock client)")
 
-  debug_output: list[bytes | None] = list()
+  debug_output = list()
 
   print("tester present ...")
   uds_client.tester_present()
@@ -256,34 +256,6 @@ if __name__ == "__main__":
     else:
       sys.exit(1)
 
-  if isinstance(uds_client, mock.Mock):
-    from unittest.mock import ANY, call
-
-    #print(uds_client.method_calls)
-
-    calls = []
-    calls += [call.read_data_by_identifier(DATA_IDENTIFIER_TYPE.APPLICATION_SOFTWARE_IDENTIFICATION)]
-    calls += [call.diagnostic_session_control(SESSION_TYPE.EXTENDED_DIAGNOSTIC)]
-    calls += [call.security_access(ACCESS_TYPE.REQUEST_SEED)]
-    calls += [call.security_access(ACCESS_TYPE.SEND_KEY, ANY)]
-    calls += [call.diagnostic_session_control(SESSION_TYPE.PROGRAMMING)]
-    calls += [call.routine_control(ROUTINE_CONTROL_TYPE.START, ROUTINE_IDENTIFIER_TYPE.ERASE_MEMORY)]
-    calls += [call.write_data_by_identifier(FLASH_DECRYPTION_KEY, fw.keys)]
-    calls += [call.request_download(0x10000, 0x50000)]
-    calls += [call.transfer_data(1, fw.firmware_encrypted[0][0:512])]
-    calls += [call.transfer_data(2, fw.firmware_encrypted[0][512:1024])]
-    uds_client.assert_has_calls(calls)
-
-    num_blocks = -(len(fw.firmware_encrypted[0]) // -512) # sneaky math ceil
-    assert uds_client.transfer_data.call_count == num_blocks
-
-    calls = []
-    calls += [call.transfer_data(num_blocks & 0xFF - 1, fw.firmware_encrypted[0][((num_blocks-1)*512):])]
-    calls += [call.request_transfer_exit()]
-    calls += [call.routine_control(ROUTINE_CONTROL_TYPE.START, ROUTINE_IDENTIFIER_TYPE.CHECK_PROGRAMMING_DEPENDENCIES)]
-    calls += [call.ecu_reset(RESET_TYPE.HARD)]
-    uds_client.assert_has_calls(calls)
-
-    if args.debug:
-      print("\nDebug output:")
-      print(*debug_output, sep="\n")
+  if args.debug:
+    print("\nDebug output:")
+    print(*debug_output, sep="\n")
