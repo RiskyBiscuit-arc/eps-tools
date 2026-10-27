@@ -51,11 +51,12 @@ def dependencies():
             'opendbc.car.structs': structs, 'tqdm': types.SimpleNamespace(tqdm=Mock())}
 
 
-def image(length=0x4c000):
+def image(length=0x4c000, key=b'\x01\x02\x03', ids=1, secrets=1):
     inverse = {v: k for k, v in check_rwd.DECRYPT_LOOKUP.items()}
     payload = bytes([inverse[0]]) * length
     # Six headers: target ECU, matching software ID, seed secret, encryption key.
-    header = b'\x00\x00\x01\x01\x30\x01\x01A\x01\x06' + b'\x00' * 6 + b'\x01\x03abc'
+    header = (b'\x00\x00\x01\x01\x30' + bytes([ids]) + b'\x01A' * ids +
+              bytes([secrets]) + (b'\x06' + b'\x00' * 6) * secrets + b'\x01\x03' + key)
     body = b'\x5a\x0d\x0a' + header + struct.pack('!II', 0x10000, length) + payload
     return body + struct.pack('<I', sum(body) & 0xffffffff)
 
@@ -92,6 +93,20 @@ class ValidationTests(unittest.TestCase):
                 bad.write_bytes(b'')
                 self.assertNotEqual(subprocess.run(command + [str(bad)], capture_output=True).returncode, 0)
 
+    def test_classify_separates_uncovered_from_failed(self):
+        raw = bytearray(image())
+        raw[-5] ^= 1
+        raw[-4:] = struct.pack('<I', sum(raw[:-4]))
+        cases = ((image(), check_rwd.VALID), (image(key=b'xyz'), check_rwd.NOT_COVERED),
+                 (image(8), check_rwd.NOT_COVERED), (bytes(raw), check_rwd.INVALID),
+                 (image(secrets=2), check_rwd.INVALID), (image(ids=0, secrets=0), check_rwd.INVALID), (b'', check_rwd.INVALID))
+        with tempfile.TemporaryDirectory(dir=TOOLS / 'tests') as folder:
+            path = Path(folder) / 'image.rwd'
+            for raw, expected in cases:
+                path.write_bytes(raw)
+                with self.subTest(expected=expected), contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(check_rwd.classify(path), expected)
+
     def test_x31_bytes_and_validation(self):
         from rwd_format.x31 import x31
         headers = b''
@@ -107,7 +122,7 @@ class ValidationTests(unittest.TestCase):
                 x31(invalid)
 
     def test_manual_flashing_blocks_unknown_and_malformed(self):
-        for raw, flags in ((image(8), []), (b'', ['--skip-checksum'])):
+        for raw, flags in ((image(8), []), (b'', ['--skip-checksum']), (image(secrets=2), ['--skip-checksum'])):
             modules = dependencies()
             with tempfile.TemporaryDirectory(dir=TOOLS / 'tests') as folder:
                 path = Path(folder) / 'image.rwd'
@@ -259,7 +274,7 @@ class FlashTests(unittest.TestCase):
             with patch.object(sys, 'argv', ['flash.py']), \
                  patch.object(self.flash, 'find_images', return_value=['test.rwd']), \
                  patch.object(self.flash, 'car_eps_fw', return_value=None), \
-                 patch.object(self.flash, 'validate', return_value=True), \
+                 patch.object(self.flash, 'validate', return_value=self.flash.check_rwd.VALID), \
                  patch('builtins.input', side_effect=['1', 'yes', '', 'FLASH']), \
                  patch.object(self.flash, 'stop_openpilot'), \
                  patch.object(self.flash, 'resolve_bus', return_value=1), \
@@ -274,6 +289,68 @@ class FlashTests(unittest.TestCase):
                 self.assertEqual(exit_status.exception.code, rc)
                 self.assertEqual(menu.call_args.kwargs['flash_succeeded'], rc == 0)
                 self.assertEqual('Firmware programming completed.' in output.getvalue(), rc == 0)
+
+    def run_main_with_status(self, status):
+        with patch.object(sys, 'argv', ['flash.py']), \
+             patch.object(self.flash, 'find_images', return_value=['test.rwd']), \
+             patch.object(self.flash, 'car_eps_fw', return_value=None), \
+             patch.object(self.flash, 'validate', return_value=status), \
+             patch('builtins.input', side_effect=['1', 'yes', 'yes', '', 'FLASH']), \
+             patch.object(self.flash, 'stop_openpilot') as stop, \
+             patch.object(self.flash, 'resolve_bus', return_value=1), \
+             patch.object(self.flash, 'rwd_can_address', return_value=0x18da30f1), \
+             patch.object(self.flash, 'choose_dry_run', return_value=False), \
+             patch.object(self.flash, 'run_real_flash', return_value=0) as flash, \
+             patch.object(self.flash, 'post_flash_menu'), \
+             contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as exit_status:
+            self.flash.main()
+        return exit_status.exception.code, stop, flash
+
+    def test_failed_image_is_refused_before_stopping_openpilot(self):
+        code, stop, flash = self.run_main_with_status(self.flash.check_rwd.INVALID)
+        self.assertIn('refusing to flash', code)
+        stop.assert_not_called()
+        flash.assert_not_called()
+
+    def test_uncovered_image_needs_skip_checksum(self):
+        code, stop, flash = self.run_main_with_status(self.flash.check_rwd.NOT_COVERED)
+        self.assertEqual(code, 0)
+        self.assertTrue(flash.call_args.args[2])
+
+    def test_eps_update_requires_panda_unless_mock(self):
+        modules = dependencies()
+        modules['panda'].Panda.side_effect = OSError('no panda')
+        with tempfile.TemporaryDirectory(dir=TOOLS / 'tests') as folder:
+            path = Path(folder) / 'test.rwd'
+            path.write_bytes(image())
+            with patch.dict(sys.modules, modules), \
+                 patch.object(sys, 'argv', ['eps-update.py', str(path)]), \
+                 contextlib.redirect_stdout(io.StringIO()) as output, self.assertRaises(SystemExit) as status:
+                runpy.run_path(str(TOOLS / 'eps-update.py'), run_name='__main__')
+        self.assertIn('Could not open the Panda', str(status.exception))
+        self.assertNotIn('Using mock client', output.getvalue())
+
+    def test_eps_update_rejects_unusable_block_length(self):
+        modules = dependencies()
+        client = Mock()
+        client.read_data_by_identifier.return_value = b'A'
+        client.security_access.return_value = b'\x00\x01'
+        client.request_download.return_value = 2
+        # A plain namespace, so eps-update's mock-client guard doesn't trip.
+        modules['opendbc.car.uds'].UdsClient.return_value = types.SimpleNamespace(**{
+            name: getattr(client, name) for name in ('read_data_by_identifier', 'security_access', 'tester_present',
+            'diagnostic_session_control', 'routine_control', 'write_data_by_identifier', 'request_download', 'transfer_data')})
+        with tempfile.TemporaryDirectory(dir=TOOLS / 'tests') as folder:
+            path = Path(folder) / 'test.rwd'
+            path.write_bytes(image())
+            with patch.dict(sys.modules, modules), \
+                 patch.object(sys, 'argv', ['eps-update.py', str(path), '--danger']), \
+                 patch('time.sleep'), contextlib.redirect_stdout(io.StringIO()) as output, \
+                 self.assertRaises(SystemExit) as status:
+                runpy.run_path(str(TOOLS / 'eps-update.py'), run_name='__main__')
+        self.assertEqual(status.exception.code, 1)
+        self.assertIn('unusable max block length', output.getvalue())
+        client.transfer_data.assert_not_called()
 
     def test_eps_update_dry_run_no_traceback_or_erase(self):
         modules = dependencies()

@@ -5,9 +5,11 @@ Guided EPS flash helper.
 Steps it runs for you:
   1. Reads the EPS firmware ID cached in CarParams (from the last fingerprint, not
      a live read), scans .rwd images (in rwd/ and next to this script), and shows
-     only ones compatible with that ID — pre-validating each with check_rwd.py
-     (flags any that fail). If none are compatible it asks before listing all
-     images; if no cached ID exists it lists all images.
+     only ones compatible with that ID — pre-validating each with check_rwd.py.
+     Images that are malformed or fail a checksum cannot be selected; images the
+     checker cannot cover need explicit confirmation and --skip-checksum. If none
+     are compatible it asks before listing all images; if no cached ID exists it
+     lists all images.
   2. Shows a numbered list; you pick one.
   3. Confirms the car is OFF, then stops openpilot (frees the panda), then
      prompts you to switch the ignition ON (engine OFF).
@@ -74,12 +76,12 @@ def subprocess_env():
 
 
 def validate(path):
-    """True if the image passes check_rwd (run quietly)."""
+    """check_rwd status for the image (run quietly): VALID, NOT_COVERED or INVALID."""
     try:
         with contextlib.redirect_stdout(io.StringIO()):
-            return bool(check_rwd.check(path))
+            return check_rwd.classify(path)
     except Exception:
-        return False
+        return check_rwd.INVALID
 
 
 def find_images():
@@ -397,7 +399,7 @@ def run_dry_run(rel, bus, skip_checksum, env, name, seed_timeout=None):
         break
     print("Dry run completed — no erase or programming performed.")
     print("Note: some EPS units lock security access briefly after a dry run.")
-    print("If the real flash fails with a security/timeout error, wait or power-cycle, then retry.")
+    print("If the real flash fails with a security/timeout error, wait with the ignition ON, then retry.")
 
 
 def run_real_flash(rel, bus, skip_checksum, env, name, seed_timeout=None):
@@ -415,8 +417,9 @@ def flash_failure_menu(rel, bus, skip_checksum, env, name, rc, seed_timeout=None
     while rc != 0:
         print(f"\nFlash process exited ({rc}).")
         print("FLASH FAILED or incomplete — EPS may need a recovery re-flash.")
-        print("A security lockout after a dry run is common on some cars:")
-        print("  wait a bit, power-cycle the car (OFF → ignition ON, engine OFF), then retry.")
+        print("A security lockout after a dry run is common on some cars. Retrying")
+        print("  waits out the delay timer; leave the ignition ON, since turning it off")
+        print("  restarts the timer. Power-cycle only if the EPS stops responding.")
         print("  [r] Retry flash (--danger only, no dry run)")
         print("  [m] Continue to post-flash menu")
         print("  [q] Quit (leave openpilot stopped)")
@@ -439,7 +442,7 @@ def flash_failure_menu(rel, bus, skip_checksum, env, name, rc, seed_timeout=None
 
 def main():
     ap = argparse.ArgumentParser(description="Guided EPS flash helper")
-    ap.add_argument("-b", "--bus", type=int, default=None,
+    ap.add_argument("-b", "--bus", type=lambda x: int(x, 0), default=None,
                     help="CAN bus number (default: auto-detect; fallback 1)")
     ap.add_argument("--skip-dry-run", action="store_true",
                     help="Skip the dry-run prompt and dry run (not recommended)")
@@ -473,12 +476,16 @@ def main():
         print("Could not read the car's EPS firmware (not fingerprinted yet?). Showing all images.\n")
         shown = images
 
+    labels = {
+        check_rwd.VALID: "valid ✓",
+        check_rwd.NOT_COVERED: "NOT VALIDATED ?  -> checker can't cover it; needs --skip-checksum (brick risk)",
+        check_rwd.INVALID: "INVALID ✗  -> malformed or failed checksum; cannot be flashed",
+    }
     rows = []
     for i, f in enumerate(shown):
-        ok = validate(f)
-        rows.append((f, ok))
-        status = "valid ✓" if ok else "INVALID ✗  -> will need --skip-checksum (brick risk)"
-        print(f"  [{i + 1:>2}] {os.path.basename(f):<44} {status}")
+        status = validate(f)
+        rows.append((f, status))
+        print(f"  [{i + 1:>2}] {os.path.basename(f):<44} {labels[status]}")
 
     sel = input("\nSelect a firmware number to flash (q to quit): ").strip()
     if sel.lower() in ("", "q", "quit"):
@@ -490,14 +497,17 @@ def main():
     # Reject 0 and out-of-range: int("0")-1 == -1 would silently pick the last row.
     if idx < 0 or idx >= len(rows):
         sys.exit("Invalid selection.")
-    path, ok = rows[idx]
+    path, status = rows[idx]
 
     rel = os.path.relpath(path, HERE)
     name = os.path.basename(path)
-    skip_checksum = not ok
+    skip_checksum = status == check_rwd.NOT_COVERED
 
-    if not ok:
-        print(f"\n!! {name} FAILED checksum validation.")
+    if status == check_rwd.INVALID:
+        sys.exit(f"\n{name} is malformed or failed a checksum — refusing to flash it. "
+                 f"Run `python3 check_rwd.py {rel}` for details.")
+    if skip_checksum:
+        print(f"\n!! {name} could not be fully validated (the checker doesn't cover this image).")
         print("!! It can only be flashed with --skip-checksum. A bad image can BRICK the EPS.")
         if input("   Type 'yes' to continue with this unvalidated image: ").strip().lower() != "yes":
             sys.exit("Aborted.")

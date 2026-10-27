@@ -115,8 +115,10 @@ def passive_sniff(panda: Panda, buses: list[int], resp_addr: int,
   print(f"      Watching for frames from 0x{resp_addr:08X} (EPS response addr)")
 
   print("      Passive silence is inconclusive: this diagnostic address is not a periodic heartbeat.")
+  # can_clear(bus) only drops queued TX; 0xFFFF drops buffered RX so stale frames aren't counted.
   for bus in bus_list:
     panda.can_clear(bus)
+  panda.can_clear(0xFFFF)
 
   deadline = time.monotonic() + duration
   eps_counts = {b: 0 for b in bus_list}

@@ -46,9 +46,11 @@ def read_file(fn):
 
   return f_data
 
-def validate_fw(fw_encrypted):
-  from check_rwd import validate_firmware
-  validate_firmware(fw_encrypted)
+def validate_fw(fw, skip_checksum):
+  from check_rwd import validate_container, validate_firmware
+  validate_container(fw)
+  if not skip_checksum:
+    validate_firmware(fw)
 
 
 def calculate_session_key(const_bytes, seed_bytes):
@@ -60,13 +62,17 @@ def calculate_session_key(const_bytes, seed_bytes):
   key = ((seed + k0) ^ (seed * k1) % k2) & 0xFFFF
   return struct.pack('!H', key)
 
-def get_uds_client(can_addr, bus):
-  try:
-    panda = Panda(disable_checks=True)
-    panda.set_safety_mode(CarParams.SafetyModel.elm327)
+def get_uds_client(can_addr, bus, use_mock=False):
+  if not use_mock:
+    try:
+      panda = Panda(disable_checks=True)
+      panda.set_safety_mode(CarParams.SafetyModel.elm327)
+    except Exception as e:
+      raise SystemExit(f"Could not open the Panda ({e}). Stop openpilot, check the connection, "
+                       "or pass --mock to rehearse without hardware.") from e
     uds_client = UdsClient(panda, can_addr, bus=bus)
     print("Using real client")
-  except Exception:
+  else:
     mock_helper = mock.patch('opendbc.car.uds.UdsClient', autospec=True)
     uds_client = mock_helper.start()
     uds_client.security_access.return_value = b'1234'
@@ -145,6 +151,7 @@ if __name__ == "__main__":
   parser.add_argument("--debug", action="store_true", help="Enable debug output")
   parser.add_argument("--danger", action="store_true", help="Run in danger mode that actually performs mutating actions")
   parser.add_argument("--skip-checksum", action="store_true", help="Skip firmware checksum validation (not recommended — an image with bad checksums can brick the EPS)")
+  parser.add_argument("--mock", action="store_true", help="Rehearse the dry-run flow with a mock client instead of a Panda")
   parser.add_argument("--seed-timeout", default=DEFAULT_SEED_TIMEOUT_S, type=float,
                       help=f"Seconds to keep retrying the security-access seed request while the EPS "
                            f"reports a delay/lockout (default {DEFAULT_SEED_TIMEOUT_S:.0f})")
@@ -152,8 +159,7 @@ if __name__ == "__main__":
 
   try:
     fw = x5a(read_file(args.rwd))
-    if not args.skip_checksum:
-      validate_fw(fw)
+    validate_fw(fw, args.skip_checksum)
   except (OSError, ValueError) as e:
     raise SystemExit(f"Image validation failed: {e}") from e
 
@@ -161,7 +167,7 @@ if __name__ == "__main__":
 
   can_addr = get_can_address(fw)
   print(f"Connecting to CAN address 0x{can_addr:08X}")
-  uds_client = get_uds_client(can_addr, args.bus)
+  uds_client = get_uds_client(can_addr, args.bus, args.mock)
   # --danger must never proceed on the mock fallback — it would "succeed" without
   # programming the EPS.
   if args.danger and isinstance(uds_client, mock.Mock):
@@ -217,6 +223,9 @@ if __name__ == "__main__":
     length = block["length"]
     max_chunk_size = uds_client.request_download(block["start"], length)
     max_chunk_size -= 2 # subtract header bytes
+    if max_chunk_size <= 0:
+      # A zero chunk would never advance the transfer loop below.
+      raise ValueError(f"ECU reported an unusable max block length ({max_chunk_size + 2} bytes)")
 
     with tqdm.tqdm(total=length, unit='B', unit_scale=True) as t:
       cursor = 0x0

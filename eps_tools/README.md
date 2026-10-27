@@ -78,6 +78,11 @@ OFF, and stops openpilot. It then prompts for ignition ON (engine OFF), detects 
 offers the recommended dry run, and requires you to type `FLASH` before programming.
 Follow the prompts; do not bypass image validation or the dry run for normal use.
 
+Images that are malformed or fail a checksum are listed as **INVALID** and cannot
+be selected. Images the checker cannot cover (an unknown length or encryption key)
+are listed as **NOT VALIDATED**; you can still flash them after an explicit
+confirmation, and the guided script then passes `--skip-checksum`.
+
 After **“Firmware programming completed”**, the menu offers an optional
 communication sanity check that confirms the EPS responds. Being offered the check
 does not mean a failure was detected, and a passing check does not verify steering
@@ -104,11 +109,15 @@ An expected dry-run stop is printed without a traceback. Bus 1 is the manual
 default, not a guarantee that it is correct for your vehicle. Restore openpilot
 when finished, or reboot the device.
 
+If the Panda can't be opened, `eps-update.py` stops with an error. To rehearse the
+dry-run flow without hardware, pass `--mock`; `--danger` never runs on the mock.
+
 ### `--skip-checksum` (not recommended)
 `--skip-checksum` skips the firmware checksum check. It is meant for images the
-checker does not cover (`check_rwd.py` reports "not fully validated"), but it also
-bypasses checksums that actively **fail**. **Be careful — flashing a `.rwd` with
-invalid checksums can brick the EPS.** Only use it on an image you trust.
+checker does not cover (`check_rwd.py` reports "not fully validated"). In manual
+use it also bypasses checksums that actively **fail**, which `flash.py` refuses.
+**Be careful — flashing a `.rwd` with invalid checksums can brick the EPS.** Only
+use it on an image you trust.
 ```
 python3 eps-update.py rwd/SOME_FIRMWARE.rwd -b 1 --skip-checksum --danger
 ```
@@ -156,9 +165,13 @@ python3 check_rwd.py rwd/*.rwd
 ```
 
 Unsupported checksum coverage is reported as not fully validated and returns a
-nonzero exit status, as do malformed images and failed checksums. The explicit
-`--skip-checksum` flow can bypass firmware checksum checks, but cannot bypass
-container structure, declared payload length, or the file checksum.
+nonzero exit status, as do malformed images and failed checksums. The firmware
+checksums are only checked for images with the known CR-V/Civic encryption key
+(`010203`); other keys are reported as not fully validated, because their
+decryption table may differ. The explicit `--skip-checksum` flow can bypass
+firmware checksum checks, but cannot bypass container structure (including the
+ECU address, software ID, and seed-secret headers), declared payload length, or
+the file checksum.
 
 See `rwd/README.md` for local firmware handling. Firmware is excluded from the
 standalone tools repository.
