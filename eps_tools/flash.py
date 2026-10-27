@@ -5,10 +5,10 @@ Guided EPS flash helper.
 Steps it runs for you:
   1. Reads the EPS firmware ID cached in CarParams (from the last fingerprint, not
      a live read), scans .rwd images (in rwd/ and next to this script), and shows
-     only ones compatible with that ID — pre-validating each with check_rwd.py.
-     Images that are malformed or fail a checksum cannot be selected; images the
-     checker cannot cover need explicit confirmation and --skip-checksum. If none
-     are compatible it asks before listing all images; if no cached ID exists it
+     only ones compatible with that ID — validating each with check_rwd.py.
+     Images that are malformed or fail a checksum cannot be selected (advanced
+     users can still use eps-update.py --skip-checksum by hand). If none are
+     compatible it asks before listing all images; if no cached ID exists it
      lists all images.
   2. Shows a numbered list; you pick one.
   3. Confirms the car is OFF, then stops openpilot (frees the panda), then
@@ -76,12 +76,12 @@ def subprocess_env():
 
 
 def validate(path):
-    """check_rwd status for the image (run quietly): VALID, NOT_COVERED or INVALID."""
+    """True if the image passes check_rwd (run quietly)."""
     try:
         with contextlib.redirect_stdout(io.StringIO()):
-            return check_rwd.classify(path)
+            return bool(check_rwd.check(path))
     except Exception:
-        return check_rwd.INVALID
+        return False
 
 
 def find_images():
@@ -265,10 +265,9 @@ def stop_openpilot():
     print("  done.\n")
 
 
-def run_eps_update(rel_path, bus, skip_checksum, danger, seed_timeout=None):
+def run_eps_update(rel_path, bus, danger, seed_timeout=None):
+    # Never passes --skip-checksum: the guided flow only flashes validated images.
     cmd = [sys.executable, EPS_UPDATE, rel_path, "-b", str(bus)]
-    if skip_checksum:
-        cmd.append("--skip-checksum")
     if danger:
         cmd.append("--danger")
     if seed_timeout is not None:
@@ -364,7 +363,7 @@ def run_and_tee(cmd, env):
     return proc.returncode, "".join(lines)
 
 
-def run_dry_run(rel, bus, skip_checksum, env, name, seed_timeout=None):
+def run_dry_run(rel, bus, env, name, seed_timeout=None):
     # seed_timeout None = normal use: fall back to eps-update.py's own default and
     # let an interactive lockout be handled by prompting to keep waiting, so plain
     # `flash.py` never needs a flag. An explicit --seed-timeout pins the window and
@@ -374,7 +373,7 @@ def run_dry_run(rel, bus, skip_checksum, env, name, seed_timeout=None):
     while True:
         print(f"\n=== DRY RUN: {name} (validates + auth flow, stops before erase) ===\n")
         rc, combined = run_and_tee(
-            run_eps_update(rel, bus, skip_checksum, danger=False, seed_timeout=effective), env)
+            run_eps_update(rel, bus, danger=False, seed_timeout=effective), env)
         # Mock UDS client also reaches the safe-abort marker; require a real Panda.
         if REAL_CLIENT_MARKER not in combined:
             exit_with_op_stopped(
@@ -402,13 +401,13 @@ def run_dry_run(rel, bus, skip_checksum, env, name, seed_timeout=None):
     print("If the real flash fails with a security/timeout error, wait with the ignition ON, then retry.")
 
 
-def run_real_flash(rel, bus, skip_checksum, env, name, seed_timeout=None):
+def run_real_flash(rel, bus, env, name, seed_timeout=None):
     print(f"\n=== FLASHING: {name} (bus {bus}) ===\n")
-    return subprocess.run(run_eps_update(rel, bus, skip_checksum, danger=True, seed_timeout=seed_timeout),
+    return subprocess.run(run_eps_update(rel, bus, danger=True, seed_timeout=seed_timeout),
                           env=env, cwd=HERE).returncode
 
 
-def flash_failure_menu(rel, bus, skip_checksum, env, name, rc, seed_timeout=None):
+def flash_failure_menu(rel, bus, env, name, rc, seed_timeout=None):
     """After a failed flash: retry (--danger only) or continue to post-flash menu.
 
     Choosing retry is enough confirmation — no second FLASH prompt.
@@ -425,7 +424,7 @@ def flash_failure_menu(rel, bus, skip_checksum, env, name, rc, seed_timeout=None
         print("  [q] Quit (leave openpilot stopped)")
         choice = input("Select r/m/q: ").strip().lower()
         if choice == "r":
-            rc = run_real_flash(rel, bus, skip_checksum, env, name, seed_timeout)
+            rc = run_real_flash(rel, bus, env, name, seed_timeout)
             if rc == 0:
                 print(f"\nFlash process exited ({rc}).")
                 print("Firmware programming completed. You can optionally check EPS communication below.")
@@ -476,16 +475,12 @@ def main():
         print("Could not read the car's EPS firmware (not fingerprinted yet?). Showing all images.\n")
         shown = images
 
-    labels = {
-        check_rwd.VALID: "valid ✓",
-        check_rwd.NOT_COVERED: "NOT VALIDATED ?  -> checker can't cover it; needs --skip-checksum (brick risk)",
-        check_rwd.INVALID: "INVALID ✗  -> malformed or failed checksum; cannot be flashed",
-    }
     rows = []
     for i, f in enumerate(shown):
-        status = validate(f)
-        rows.append((f, status))
-        print(f"  [{i + 1:>2}] {os.path.basename(f):<44} {labels[status]}")
+        ok = validate(f)
+        rows.append((f, ok))
+        status = "valid ✓" if ok else "INVALID ✗  -> malformed or failed checksum; cannot be flashed"
+        print(f"  [{i + 1:>2}] {os.path.basename(f):<44} {status}")
 
     sel = input("\nSelect a firmware number to flash (q to quit): ").strip()
     if sel.lower() in ("", "q", "quit"):
@@ -497,20 +492,14 @@ def main():
     # Reject 0 and out-of-range: int("0")-1 == -1 would silently pick the last row.
     if idx < 0 or idx >= len(rows):
         sys.exit("Invalid selection.")
-    path, status = rows[idx]
+    path, ok = rows[idx]
 
     rel = os.path.relpath(path, HERE)
     name = os.path.basename(path)
-    skip_checksum = status == check_rwd.NOT_COVERED
 
-    if status == check_rwd.INVALID:
+    if not ok:
         sys.exit(f"\n{name} is malformed or failed a checksum — refusing to flash it. "
                  f"Run `python3 check_rwd.py {rel}` for details.")
-    if skip_checksum:
-        print(f"\n!! {name} could not be fully validated (the checker doesn't cover this image).")
-        print("!! It can only be flashed with --skip-checksum. A bad image can BRICK the EPS.")
-        if input("   Type 'yes' to continue with this unvalidated image: ").strip().lower() != "yes":
-            sys.exit("Aborted.")
 
     # Power sequence: kill openpilot with the car OFF, then switch the ignition
     # ON — so openpilot doesn't re-grab the panda when CAN comes alive.
@@ -525,7 +514,7 @@ def main():
     env = subprocess_env()
 
     if choose_dry_run(args.skip_dry_run):
-        run_dry_run(rel, bus, skip_checksum, env, name, args.seed_timeout)
+        run_dry_run(rel, bus, env, name, args.seed_timeout)
 
     print(f"\n=== READY TO FLASH: {name} (bus {bus}) ===")
     print("Make sure the ignition is ON (engine OFF, A/C off).")
@@ -533,12 +522,12 @@ def main():
     if input("Type 'FLASH' to commit the real flash (--danger): ").strip() != "FLASH":
         exit_with_op_stopped("Aborted — no flash performed.")
 
-    rc = run_real_flash(rel, bus, skip_checksum, env, name, args.seed_timeout)
+    rc = run_real_flash(rel, bus, env, name, args.seed_timeout)
     if rc == 0:
         print(f"\nFlash process exited ({rc}).")
         print("Firmware programming completed. You can optionally check EPS communication below.")
     else:
-        rc = flash_failure_menu(rel, bus, skip_checksum, env, name, rc, args.seed_timeout)
+        rc = flash_failure_menu(rel, bus, env, name, rc, args.seed_timeout)
 
     post_flash_menu(env, bus, eps_addr=eps_addr, flash_succeeded=rc == 0)
     sys.exit(rc)

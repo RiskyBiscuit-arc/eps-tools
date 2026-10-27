@@ -83,7 +83,7 @@ class ValidationTests(unittest.TestCase):
                 self.assertTrue(check_rwd.check(good))
                 self.assertFalse(check_rwd.check(bad))
                 self.assertFalse(check_rwd.check(unknown))
-            self.assertIn('not fully validated', output.getvalue())
+            self.assertIn('too short', output.getvalue())
             for optimized in (False, True):
                 bad.write_bytes(raw)
                 command = [sys.executable] + (['-O'] if optimized else []) + [str(TOOLS / 'check_rwd.py')]
@@ -93,19 +93,20 @@ class ValidationTests(unittest.TestCase):
                 bad.write_bytes(b'')
                 self.assertNotEqual(subprocess.run(command + [str(bad)], capture_output=True).returncode, 0)
 
-    def test_classify_separates_uncovered_from_failed(self):
+    def test_every_image_gets_the_standard_checks(self):
         raw = bytearray(image())
         raw[-5] ^= 1
         raw[-4:] = struct.pack('<I', sum(raw[:-4]))
-        cases = ((image(), check_rwd.VALID), (image(key=b'xyz'), check_rwd.NOT_COVERED),
-                 (image(8), check_rwd.NOT_COVERED), (bytes(raw), check_rwd.INVALID),
-                 (image(secrets=2), check_rwd.INVALID), (image(ids=0, secrets=0), check_rwd.INVALID), (b'', check_rwd.INVALID))
+        # Lengths and keys outside the TLA/Clarity images are still validated, not skipped.
+        cases = ((image(), True), (image(0x1000), True), (image(key=b'xyz'), True),
+                 (image(8), False), (image(0x1001), False), (bytes(raw), False),
+                 (image(secrets=2), False), (image(ids=0, secrets=0), False), (b'', False))
         with tempfile.TemporaryDirectory(dir=TOOLS / 'tests') as folder:
             path = Path(folder) / 'image.rwd'
             for raw, expected in cases:
                 path.write_bytes(raw)
-                with self.subTest(expected=expected), contextlib.redirect_stdout(io.StringIO()):
-                    self.assertEqual(check_rwd.classify(path), expected)
+                with self.subTest(length=len(raw), expected=expected), contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(check_rwd.check(path), expected)
 
     def test_x31_bytes_and_validation(self):
         from rwd_format.x31 import x31
@@ -264,17 +265,17 @@ class FlashTests(unittest.TestCase):
                  patch.object(self.flash, 'exit_with_op_stopped', side_effect=SystemExit(1)), \
                  contextlib.redirect_stdout(io.StringIO()):
                 if accepted:
-                    self.flash.run_dry_run('test.rwd', 1, False, {}, 'test')
+                    self.flash.run_dry_run('test.rwd', 1, {}, 'test')
                 else:
                     with self.assertRaises(SystemExit):
-                        self.flash.run_dry_run('test.rwd', 1, False, {}, 'test')
+                        self.flash.run_dry_run('test.rwd', 1, {}, 'test')
 
     def test_main_preserves_failed_flash_status(self):
         for rc in (0, 1):
             with patch.object(sys, 'argv', ['flash.py']), \
                  patch.object(self.flash, 'find_images', return_value=['test.rwd']), \
                  patch.object(self.flash, 'car_eps_fw', return_value=None), \
-                 patch.object(self.flash, 'validate', return_value=self.flash.check_rwd.VALID), \
+                 patch.object(self.flash, 'validate', return_value=True), \
                  patch('builtins.input', side_effect=['1', 'yes', '', 'FLASH']), \
                  patch.object(self.flash, 'stop_openpilot'), \
                  patch.object(self.flash, 'resolve_bus', return_value=1), \
@@ -295,7 +296,7 @@ class FlashTests(unittest.TestCase):
              patch.object(self.flash, 'find_images', return_value=['test.rwd']), \
              patch.object(self.flash, 'car_eps_fw', return_value=None), \
              patch.object(self.flash, 'validate', return_value=status), \
-             patch('builtins.input', side_effect=['1', 'yes', 'yes', '', 'FLASH']), \
+             patch('builtins.input', side_effect=['1', 'yes', '', 'FLASH']), \
              patch.object(self.flash, 'stop_openpilot') as stop, \
              patch.object(self.flash, 'resolve_bus', return_value=1), \
              patch.object(self.flash, 'rwd_can_address', return_value=0x18da30f1), \
@@ -307,15 +308,16 @@ class FlashTests(unittest.TestCase):
         return exit_status.exception.code, stop, flash
 
     def test_failed_image_is_refused_before_stopping_openpilot(self):
-        code, stop, flash = self.run_main_with_status(self.flash.check_rwd.INVALID)
+        code, stop, flash = self.run_main_with_status(False)
         self.assertIn('refusing to flash', code)
         stop.assert_not_called()
         flash.assert_not_called()
 
-    def test_uncovered_image_needs_skip_checksum(self):
-        code, stop, flash = self.run_main_with_status(self.flash.check_rwd.NOT_COVERED)
+    def test_valid_image_never_skips_checksum(self):
+        code, stop, flash = self.run_main_with_status(True)
         self.assertEqual(code, 0)
-        self.assertTrue(flash.call_args.args[2])
+        flash.assert_called_once()
+        self.assertNotIn('--skip-checksum', self.flash.run_eps_update('test.rwd', 1, danger=True))
 
     def test_eps_update_requires_panda_unless_mock(self):
         modules = dependencies()
