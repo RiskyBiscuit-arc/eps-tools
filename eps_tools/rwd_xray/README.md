@@ -22,7 +22,14 @@ minimum steer speed reduced to 0mph
 39990-TGN-E120 Honda Civic Hatch (Europe,
 39990-TGG-A020 Honda Civic Hatch (Sport/Sport Touring), 
 39990-TRW-A020 Honda Clarity,   
-39990-TXM-A040 Honda Insight.  
+39990-TXM-A040 Honda Insight,
+39990-TLA-A220 Honda CR-V 2020+ (feedback normalization, P/D/output clamps, speed clamp, FF45 hook),
+39990-THR-A020 Honda Odyssey 2018 (fields exposed; the default build only adds the "," version),
+39990-TJB-A220 Acura RDX (override fade and governor tables, rows 0-3, mirrored to the monitor copies).
+
+THR-A020 and TJB-A220 images start at 0xC000 (0x74000 payload) and carry runtime
+ROM CRCs at 0x4FF7C/0x6FF7C. The tool recomputes them before the checksums; a
+stale ROM CRC makes the EPS fault a second or two after it starts steering.
 
 ### Coming soon:
 
