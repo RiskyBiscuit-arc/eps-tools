@@ -108,6 +108,20 @@ class ValidationTests(unittest.TestCase):
                 with self.subTest(length=len(raw), expected=expected), contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(check_rwd.check(path), expected)
 
+    def test_known_lengths_match_published_offsets(self):
+        # Offsets the per-vehicle tables used before validation was generalized, including
+        # the RDX TJB entry carried in the Honda PTM openpilot copy.
+        known = {0x4c000: (0x4bf80, 0x4bffe), 0x6c000: (0x6bf80, 0x6bffe), 0x74000: (0x73f80, 0x73ffe)}
+        for length, (sum_offset, negative_offset) in known.items():
+            with self.subTest(length=hex(length)):
+                self.assertEqual(check_rwd.checksum_definitions(length),
+                                 [(0, sum_offset, "sum"), (1, negative_offset, "negative-sum")])
+                with tempfile.TemporaryDirectory(dir=TOOLS / 'tests') as folder:
+                    path = Path(folder) / 'image.rwd'
+                    path.write_bytes(image(length))
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.assertTrue(check_rwd.check(path))
+
     def test_x31_bytes_and_validation(self):
         from rwd_format.x31 import x31
         headers = b''

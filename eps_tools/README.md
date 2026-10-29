@@ -170,6 +170,11 @@ Every image gets the same checks, whatever the vehicle:
 - both firmware checksums: the word sum at `length - 0x80` and the negative word
   sum at `length - 2` of the decrypted block.
 
+The layout is the same for every known image, so no per-vehicle table is needed.
+For example: 0x4c000-byte blocks (Civic TBA/TEA/TGG/TGN, Clarity TRW) are checked at
+0x4bf80/0x4bffe, 0x6c000 (CR-V TLA, Insight TXM) at 0x6bf80/0x6bffe, and 0x74000
+(RDX TJB) at 0x73f80/0x73ffe.
+
 Malformed images and failed checksums return a nonzero exit status. The explicit
 `--skip-checksum` flow can bypass only the firmware checksums.
 
