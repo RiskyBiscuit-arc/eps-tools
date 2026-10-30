@@ -170,6 +170,11 @@ Every image gets the same checks, whatever the vehicle:
 - both firmware checksums: the word sum at `length - 0x80` and the negative word
   sum at `length - 2` of the decrypted block.
 
+The layout is the same for every known image, so no per-vehicle table is needed.
+For example: 0x4c000-byte blocks (Civic TBA/TEA/TGG/TGN, Clarity TRW) are checked at
+0x4bf80/0x4bffe, 0x6c000 (CR-V TLA, Insight TXM) at 0x6bf80/0x6bffe, and 0x74000
+(RDX TJB, Odyssey THR) at 0x73f80/0x73ffe.
+
 Odyssey (`39990-THR`) and RDX (`39990-TJB`) images also get their runtime ROM
 CRCs checked: CRC-32/BZIP2 over flash `0x40000-0x4FF60` stored at `0x4FF7C`, and
 over `0x60000-0x6FF60` stored at `0x6FF7C`. The EPS recomputes these while it
