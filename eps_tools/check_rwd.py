@@ -19,6 +19,49 @@ def checksum_definitions(length):
     return [(0, length - SUM_TRAILER, "sum"), (1, length - NEGATIVE_SUM_TRAILER, "negative-sum")]
 
 
+# Odyssey THR-A020 and RDX TJB-A220 images also carry runtime ROM CRCs. While
+# running, the EPS recomputes a CRC-32/BZIP2 over each region and compares it
+# with the big-endian word at the slot; a stale word passes the two checksums
+# above but faults the EPS a second or two after it starts steering. Both
+# images put the app at flash 0xC000 with a 0x74000 block; regions and slots
+# are (start, end, slot) flash addresses.
+ROM_CRC_SOFTWARE_IDS = (b'39990-THR', b'39990-TJB')
+ROM_CRC_START, ROM_CRC_LENGTH = 0xc000, 0x74000
+ROM_CRC_REGIONS = ((0x40000, 0x4ff60, 0x4ff7c), (0x60000, 0x6ff60, 0x6ff7c))
+
+
+def _crc32_bzip2_table():
+    table = []
+    for i in range(256):
+        c = i << 24
+        for _ in range(8):
+            c = ((c << 1) ^ 0x04c11db7) & 0xffffffff if c & 0x80000000 else (c << 1) & 0xffffffff
+        table.append(c)
+    return table
+
+
+CRC32_BZIP2_TABLE = _crc32_bzip2_table()
+
+
+def crc32_bzip2(data):
+    c = 0xffffffff
+    for b in data:
+        c = ((c << 8) & 0xffffffff) ^ CRC32_BZIP2_TABLE[((c >> 24) ^ b) & 0xff]
+    return c ^ 0xffffffff
+
+
+def rom_crc_definitions(fw):
+    """ROM CRC regions to check for this image, empty when it carries none."""
+    ids = [value.value for value in fw.file_headers[3].values]
+    if not any(i.startswith(prefix) for i in ids for prefix in ROM_CRC_SOFTWARE_IDS):
+        return []
+    block = fw.firmware_blocks[0]
+    if (block["start"], block["length"]) != (ROM_CRC_START, ROM_CRC_LENGTH):
+        raise ValueError(f"THR/TJB image must start at 0x{ROM_CRC_START:x} with length 0x{ROM_CRC_LENGTH:x}, "
+                         f"got 0x{block['start']:x}/0x{block['length']:x}")
+    return ROM_CRC_REGIONS
+
+
 def validate_container(fw):
     """Check the headers the flasher reads; applies even with --skip-checksum."""
     headers = fw.file_headers
@@ -34,7 +77,7 @@ def validate_container(fw):
 
 
 def validate_firmware(fw):
-    """Validate the container headers and both firmware checksums of any image."""
+    """Validate the container headers, both firmware checksums and any THR/TJB ROM CRCs."""
     validate_container(fw)
     length = fw.firmware_blocks[0]["length"]
     encrypted = fw.firmware_encrypted[0]
@@ -49,6 +92,14 @@ def validate_firmware(fw):
         if stored != calculated:
             raise ValueError(f"firmware checksum failed: {label} at 0x{offset:x}")
         print(f"  Firmware {label} checksum: PASS")
+    start = fw.firmware_blocks[0]["start"]
+    for region_start, region_end, slot in rom_crc_definitions(fw):
+        stored = struct.unpack('!I', decrypted[slot - start:slot - start + 4])[0]
+        calculated = crc32_bzip2(decrypted[region_start - start:region_end - start])
+        if stored != calculated:
+            raise ValueError(f"ROM CRC failed: [0x{region_start:x},0x{region_end:x}) at 0x{slot:x} "
+                             f"stores {stored:08x}, image gives {calculated:08x}")
+        print(f"  ROM CRC at 0x{slot:x}: PASS")
 
 
 def check(path):

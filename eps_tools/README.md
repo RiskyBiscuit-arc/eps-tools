@@ -170,8 +170,14 @@ Every image gets the same checks, whatever the vehicle:
 - both firmware checksums: the word sum at `length - 0x80` and the negative word
   sum at `length - 2` of the decrypted block.
 
+Odyssey (`39990-THR`) and RDX (`39990-TJB`) images also get their runtime ROM
+CRCs checked: CRC-32/BZIP2 over flash `0x40000-0x4FF60` stored at `0x4FF7C`, and
+over `0x60000-0x6FF60` stored at `0x6FF7C`. The EPS recomputes these while it
+runs, so a stale one passes the checksums above but faults the EPS a second or
+two after it starts steering.
+
 Malformed images and failed checksums return a nonzero exit status. The explicit
-`--skip-checksum` flow can bypass only the firmware checksums.
+`--skip-checksum` flow can bypass only the firmware checksums and ROM CRCs.
 
 See `rwd/README.md` for local firmware handling. Firmware is excluded from the
 standalone tools repository.
