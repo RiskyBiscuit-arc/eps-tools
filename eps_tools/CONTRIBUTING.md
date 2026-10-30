@@ -52,6 +52,13 @@ and explicitly retire removed tooling. Preserve local firmware; the remote
 contains no `.rwd` files. Review conflicts with any local edits before importing.
 Stage only the reviewed tooling paths and commit before handing off.
 
+A fork may keep its own `eps_tools/README.md` and `eps_tools/rwd/README.md` to
+describe where the tools live in that fork. The archive overwrites both, so
+restore the fork's versions before committing (`git checkout HEAD --
+eps_tools/README.md eps_tools/rwd/README.md`) and carry over any new tooling
+notes by hand. Send fixes to the scripts, parser and tests here instead of
+editing them in the fork, so later imports apply cleanly.
+
 The repository no longer has scripts at its root. The former direct
 `git subtree add/pull --prefix=eps_tools ... main` instructions are superseded;
 using them with this layout would produce an extra nested folder. Use the
