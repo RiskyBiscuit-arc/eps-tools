@@ -61,6 +61,23 @@ def image(length=0x4c000, key=b'\x01\x02\x03', ids=1, secrets=1):
     return body + struct.pack('<I', sum(body) & 0xffffffff)
 
 
+def rom_crc_image(software_id=b'39990-TJB,A220', start=0xc000, length=0x74000, stale=False):
+    """A THR/TJB-shaped image whose checksums are right and ROM CRCs right unless stale."""
+    app = bytearray(length)
+    for region_start, region_end, slot in check_rwd.ROM_CRC_REGIONS:
+        app[region_start - start + 7] = 0x5a  # some content to CRC
+        crc = check_rwd.crc32_bzip2(app[region_start - start:region_end - start])
+        app[slot - start:slot - start + 4] = struct.pack('!I', crc ^ (1 if stale else 0))
+    for func, offset, _label in check_rwd.checksum_definitions(length):
+        words = struct.unpack(f'!{offset // 2}H', app[:offset])
+        app[offset:offset + 2] = struct.pack('!H', (sum(words) * (-1 if func else 1)) & 0xffff)
+    inverse = {v: k for k, v in check_rwd.DECRYPT_LOOKUP.items()}
+    header = (b'\x00\x00\x01\x01\x30\x01' + bytes([len(software_id)]) + software_id +
+              b'\x01\x06' + b'\x00' * 6 + b'\x01\x03\x01\x02\x03')
+    body = b'\x5a\x0d\x0a' + header + struct.pack('!II', start, length) + bytes(inverse[b] for b in app)
+    return body + struct.pack('<I', sum(body) & 0xffffffff)
+
+
 class ValidationTests(unittest.TestCase):
     def test_parser_rejects_malformed(self):
         good = image()
@@ -107,6 +124,21 @@ class ValidationTests(unittest.TestCase):
                 path.write_bytes(raw)
                 with self.subTest(length=len(raw), expected=expected), contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(check_rwd.check(path), expected)
+
+    def test_thr_tjb_rom_crcs(self):
+        # Odyssey THR and RDX TJB images must also carry valid runtime ROM CRCs;
+        # other software IDs are not held to them.
+        cases = ((rom_crc_image(), True), (rom_crc_image(b'39990-THR-A020'), True),
+                 (rom_crc_image(stale=True), False), (rom_crc_image(b'39990-THR,A020', stale=True), False),
+                 (rom_crc_image(start=0x4000), False), (rom_crc_image(b'39990-TLA-A040', stale=True), True))
+        with tempfile.TemporaryDirectory(dir=TOOLS / 'tests') as folder:
+            path = Path(folder) / 'image.rwd'
+            for raw, expected in cases:
+                path.write_bytes(raw)
+                with self.subTest(expected=expected), contextlib.redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(check_rwd.check(path), expected)
+                if not expected:
+                    self.assertTrue('ROM CRC failed' in output.getvalue() or 'THR/TJB image' in output.getvalue())
 
     def test_known_lengths_match_published_offsets(self):
         # Offsets the per-vehicle tables used before validation was generalized, including

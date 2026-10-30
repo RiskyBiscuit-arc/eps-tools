@@ -173,10 +173,16 @@ Every image gets the same checks, whatever the vehicle:
 The layout is the same for every known image, so no per-vehicle table is needed.
 For example: 0x4c000-byte blocks (Civic TBA/TEA/TGG/TGN, Clarity TRW) are checked at
 0x4bf80/0x4bffe, 0x6c000 (CR-V TLA, Insight TXM) at 0x6bf80/0x6bffe, and 0x74000
-(RDX TJB) at 0x73f80/0x73ffe.
+(RDX TJB, Odyssey THR) at 0x73f80/0x73ffe.
+
+Odyssey (`39990-THR`) and RDX (`39990-TJB`) images also get their runtime ROM
+CRCs checked: CRC-32/BZIP2 over flash `0x40000-0x4FF60` stored at `0x4FF7C`, and
+over `0x60000-0x6FF60` stored at `0x6FF7C`. The EPS recomputes these while it
+runs, so a stale one passes the checksums above but faults the EPS a second or
+two after it starts steering.
 
 Malformed images and failed checksums return a nonzero exit status. The explicit
-`--skip-checksum` flow can bypass only the firmware checksums.
+`--skip-checksum` flow can bypass only the firmware checksums and ROM CRCs.
 
 See `rwd/README.md` for local firmware handling. Firmware is excluded from the
 standalone tools repository.
