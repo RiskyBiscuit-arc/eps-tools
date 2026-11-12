@@ -46,11 +46,11 @@ def read_file(fn):
 
   return f_data
 
-def validate_fw(fw, skip_checksum):
+def validate_fw(fw):
+  # No bypass: an image that is malformed or fails a checksum is never flashed.
   from check_rwd import validate_container, validate_firmware
   validate_container(fw)
-  if not skip_checksum:
-    validate_firmware(fw)
+  validate_firmware(fw)
 
 
 def calculate_session_key(const_bytes, seed_bytes):
@@ -150,7 +150,6 @@ if __name__ == "__main__":
   parser.add_argument("-b", "--bus", default=1, type=auto_int, help="CAN bus number (default 1)")
   parser.add_argument("--debug", action="store_true", help="Enable debug output")
   parser.add_argument("--danger", action="store_true", help="Run in danger mode that actually performs mutating actions")
-  parser.add_argument("--skip-checksum", action="store_true", help="Skip firmware checksum validation (not recommended — an image with bad checksums can brick the EPS)")
   parser.add_argument("--mock", action="store_true", help="Rehearse the dry-run flow with a mock client instead of a Panda")
   parser.add_argument("--seed-timeout", default=DEFAULT_SEED_TIMEOUT_S, type=float,
                       help=f"Seconds to keep retrying the security-access seed request while the EPS "
@@ -159,7 +158,7 @@ if __name__ == "__main__":
 
   try:
     fw = x5a(read_file(args.rwd))
-    validate_fw(fw, args.skip_checksum)
+    validate_fw(fw)
   except (OSError, ValueError) as e:
     raise SystemExit(f"Image validation failed: {e}") from e
 

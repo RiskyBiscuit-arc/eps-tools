@@ -6,8 +6,8 @@ Steps it runs for you:
   1. Reads the EPS firmware ID cached in CarParams (from the last fingerprint, not
      a live read), scans .rwd images (in rwd/ and next to this script), and shows
      only ones compatible with that ID — validating each with check_rwd.py.
-     Images that are malformed or fail a checksum cannot be selected (advanced
-     users can still use eps-update.py --skip-checksum by hand). If none are
+     Images that are malformed or fail a checksum cannot be selected, and
+     eps-update.py refuses them too: there is no bypass. If none are
      compatible it asks before listing all images; if no cached ID exists it
      lists all images.
   2. Shows a numbered list; you pick one.
@@ -266,7 +266,7 @@ def stop_openpilot():
 
 
 def run_eps_update(rel_path, bus, danger, seed_timeout=None):
-    # Never passes --skip-checksum: the guided flow only flashes validated images.
+    # eps-update.py validates the image again and has no bypass.
     cmd = [sys.executable, EPS_UPDATE, rel_path, "-b", str(bus)]
     if danger:
         cmd.append("--danger")

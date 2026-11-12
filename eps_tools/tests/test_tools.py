@@ -169,7 +169,7 @@ class ValidationTests(unittest.TestCase):
                 x31(invalid)
 
     def test_manual_flashing_blocks_unknown_and_malformed(self):
-        for raw, flags in ((image(8), []), (b'', ['--skip-checksum']), (image(secrets=2), ['--skip-checksum'])):
+        for raw, flags in ((image(8), []), (b'', []), (image(secrets=2), [])):
             modules = dependencies()
             with tempfile.TemporaryDirectory(dir=TOOLS / 'tests') as folder:
                 path = Path(folder) / 'image.rwd'
@@ -358,6 +358,23 @@ class FlashTests(unittest.TestCase):
         self.assertIn('refusing to flash', code)
         stop.assert_not_called()
         flash.assert_not_called()
+
+    def test_manual_flashing_has_no_checksum_bypass(self):
+        # The removed flag must be rejected by argparse before any image or Panda is touched.
+        modules = dependencies()
+        with tempfile.TemporaryDirectory(dir=TOOLS / 'tests') as folder:
+            path = Path(folder) / 'image.rwd'
+            path.write_bytes(image(8))
+            with patch.dict(sys.modules, modules), \
+                 patch.object(sys, 'argv', ['eps-update.py', str(path), '--danger', '--skip-checksum']), \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err, \
+                 self.assertRaises(SystemExit) as status:
+                runpy.run_path(str(TOOLS / 'eps-update.py'), run_name='__main__')
+            self.assertEqual(status.exception.code, 2)
+            self.assertIn('--skip-checksum', err.getvalue())
+            modules['panda'].Panda.assert_not_called()
+        for name in ('eps-update.py', 'flash.py'):
+            self.assertNotIn('skip_checksum', (TOOLS / name).read_text())
 
     def test_valid_image_never_skips_checksum(self):
         code, stop, flash = self.run_main_with_status(True)

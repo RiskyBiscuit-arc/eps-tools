@@ -63,7 +63,7 @@ def rom_crc_definitions(fw):
 
 
 def validate_container(fw):
-    """Check the headers the flasher reads; applies even with --skip-checksum."""
+    """Check the headers the flasher reads."""
     headers = fw.file_headers
     if len(headers[2].values) != 1 or len(headers[2].values[0].value) != 1:
         raise ValueError("header 2 must hold exactly one 1-byte ECU address")

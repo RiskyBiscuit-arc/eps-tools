@@ -80,8 +80,9 @@ Follow the prompts; do not bypass image validation or the dry run for normal use
 
 Every image gets the same `check_rwd.py` validation. Images that are malformed or
 fail a checksum are listed as **INVALID** and cannot be selected: the guided
-script is meant to keep new users from flashing a bad image, and it never passes
-`--skip-checksum`. The manual `eps-update.py` path below is for advanced users.
+script is meant to keep new users from flashing a bad image. The manual
+`eps-update.py` path below is for advanced users and runs the same validation:
+neither tool can flash an image that fails it.
 
 After **“Firmware programming completed”**, the menu offers an optional
 communication sanity check that confirms the EPS responds. Being offered the check
@@ -112,14 +113,11 @@ when finished, or reboot the device.
 If the Panda can't be opened, `eps-update.py` stops with an error. To rehearse the
 dry-run flow without hardware, pass `--mock`; `--danger` never runs on the mock.
 
-### `--skip-checksum` (not recommended)
-`--skip-checksum` skips the firmware checksum check, including checksums that
-actively **fail**. It exists only for advanced manual use; `flash.py` never uses
-it. **Be careful — flashing a `.rwd` with invalid checksums can brick the EPS.**
-Only use it on an image you trust and understand.
-```
-python3 eps-update.py rwd/SOME_FIRMWARE.rwd -b 1 --skip-checksum --danger
-```
+### No checksum bypass
+`eps-update.py` used to accept `--skip-checksum`. It was removed: flashing a
+`.rwd` with invalid checksums can brick the EPS, so an image that fails
+`check_rwd.py` cannot be flashed by either tool. If a genuine image is rejected,
+fix the checker for that layout instead of bypassing it.
 
 ## Optional EPS communication sanity check
 
@@ -181,8 +179,8 @@ over `0x60000-0x6FF60` stored at `0x6FF7C`. The EPS recomputes these while it
 runs, so a stale one passes the checksums above but faults the EPS a second or
 two after it starts steering.
 
-Malformed images and failed checksums return a nonzero exit status. The explicit
-`--skip-checksum` flow can bypass only the firmware checksums and ROM CRCs.
+Malformed images and failed checksums return a nonzero exit status. Nothing
+bypasses these checks.
 
 See `rwd/README.md` for local firmware handling. Firmware is excluded from the
 standalone tools repository.
